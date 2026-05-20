@@ -1,8 +1,13 @@
 import json
 import pandas as pd
 from collections import defaultdict
-from sklearn.model_selection import train_test_split
 import numpy as np
+from pathlib import Path
+import sys
+
+ROOT = Path.cwd().resolve().parent 
+sys.path.append(str(ROOT))
+DATA_PATH = ROOT/"data/filter_all_t.json"
 
 def load_data(path):
     with open(path, 'r', encoding='utf-8') as f:
@@ -21,39 +26,37 @@ def load_data(path):
     return data
 
 def val_test_split(df, train_ratio=0.7, val_ratio=0.1, test_ratio=0.2, seed=42):
-    df = df.sample(frac=1, random_state=seed).reset_index(drop=True)
+    rng = np.random.default_rng(seed)
+    df = df.copy().reset_index(drop=True)
 
-    # Choose one row per user that must go to train
-    mandatory_train = (
-        df.groupby("user_id", group_keys=False)
-          .sample(n=1, random_state=seed)
-    )
+    protected = set()
 
-    # Remove mandatory part 
-    mandatory_idx = set(mandatory_train.index)
-    remainder = df.drop(index=mandatory_idx)
+    # Keep at least one interaction per user
+    for _, group in df.groupby("user_id"):
+        protected.add(rng.choice(group.index.to_numpy()))
+
+    # Keep at least one interaction per item
+    for _, group in df.groupby("business_id"):
+        protected.add(rng.choice(group.index.to_numpy()))
+
+    protected = np.array(sorted(protected))
+    remaining = np.array([i for i in df.index if i not in protected])
+
+    rng.shuffle(remaining)
 
     n_total = len(df)
-    target_train_size = int(round(train_ratio * n_total))
-    target_val_size = int(round(val_ratio * n_total))
-    target_test_size = n_total - target_train_size - target_val_size
+    n_val = int(round(val_ratio * n_total))
+    n_test = int(round(test_ratio * n_total))
 
-    # Add enough remainder rows to train to approach @train_ratio
-    additional_train_needed = max(0, target_train_size - len(mandatory_train))
-    remainder = remainder.sample(frac=1, random_state=seed)
-    additional_train = remainder.iloc[:additional_train_needed]
-    # Complete train set
-    train_df = pd.concat([mandatory_train, additional_train])
-    
-    leftover = remainder.iloc[additional_train_needed:]
-    # Split leftover globally into validation and test
-    val_df = leftover.iloc[:target_val_size]
-    test_df = leftover.iloc[target_val_size:target_val_size + target_test_size]
+    test_idx = remaining[:n_test]
+    val_idx = remaining[n_test:n_test + n_val]
+    extra_train_idx = remaining[n_test + n_val:]
 
-    # Shuffle final splits
-    train_df = train_df.sample(frac=1, random_state=seed).reset_index(drop=True)
-    val_df = val_df.sample(frac=1, random_state=seed).reset_index(drop=True)
-    test_df = test_df.sample(frac=1, random_state=seed).reset_index(drop=True)
+    train_idx = np.concatenate([protected, extra_train_idx])
+
+    train_df = df.loc[train_idx].reset_index(drop=True)
+    val_df = df.loc[val_idx].reset_index(drop=True)
+    test_df = df.loc[test_idx].reset_index(drop=True)
 
     return train_df, val_df, test_df
 
@@ -86,22 +89,6 @@ def map_id_to_idx(df: pd.DataFrame, user_id_to_idx, item_id_to_idx):
     return df
 
 def build_user_history_reviews(df: pd.DataFrame, max_reviews=20):
-    """
-    for each user, aggregate all reviews written by that user into one single text
-    """
-    # def helper(history_reviews, max_revies=15):
-    #     if not isinstance(history_reviews, list):
-    #         return ""
-    #     texts = []
-    #     for item in history_reviews[:max_revies]:
-    #         if isinstance(item, list) and len(item) >= 2:
-    #             texts.append(item[1])
-    #     return "".join(texts)
-    
-    # user_profile_text = {}
-    # for _, row in df.iterrows():
-    #     user_profile_text[row["user_idx"]] = helper(row["history_reviews"])
-
     user_reviews = defaultdict(list)
     for _, row in df.iterrows():
         user_reviews[row["user_idx"]].append(row["review_text"])
@@ -127,3 +114,17 @@ def build_restaurant_history_reviews(df: pd.DataFrame, max_reviews=20):
     }
 
     return restaurant_profile_text
+
+ROOT = Path.cwd().resolve().parent 
+sys.path.append(str(ROOT))
+DATA_PATH = ROOT/"data/filter_all_t.json"
+
+if __name__ == "__main__":
+    data = load_data(path=DATA_PATH)
+    train_df, val_df, test_df = val_test_split(data)
+    print(len(train_df))
+    print(len(val_df))
+    print(len(test_df))
+    train_df.to_csv(ROOT/"data/train.csv")
+    val_df.to_csv(ROOT/"data/val.csv")
+    test_df.to_csv(ROOT/"data/test.csv")
