@@ -34,7 +34,7 @@ if __name__ == "__main__":
     ncf = NCF(
         task="rating",
         data_info=data_info,
-        loss_type="rmse",
+        loss_type="mse",
         embed_size=64,
         n_epochs=10,
         lr=1e-3,
@@ -53,12 +53,18 @@ if __name__ == "__main__":
 
     test_cf = transform_df(test_df)
     test_data = DatasetPure.build_testset(test_cf)
-    result = evaluate(
+    metrics = evaluate(
         model=ncf,
         data=test_cf,
         neg_sampling=False,
         metrics=["rmse", "mae"]
     )
-    
-    result_df = pd.DataFrame([result])
-    result_df.to_csv(ROOT/"results/ncf_metrics.csv", index=False)
+
+    print(metrics)
+    metrics_df = pd.DataFrame([metrics])
+    metrics_df.to_csv(ROOT/"results/ncf_metrics.csv", index=False)
+
+    preds = ncf.predict(test_cf["user"], test_cf["item"])
+    preds_ratings = test_df[["user_id", "business_id"]].copy()
+    preds_ratings["predicted_rating"] = preds
+    preds_ratings.to_csv(ROOT/"results/ncf_prediction.csv", index=False)

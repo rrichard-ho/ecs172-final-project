@@ -44,9 +44,9 @@ CONFIG = {
     # Training
     "batch_size": 32,
     "epochs": 7,
-    "lr": 1e-3,
-    "weight_decay": 1e-4,
-    "dropout": 0.25,
+    "lr": 2e-3,
+    "weight_decay": 1e-5,
+    "dropout": 0.3,
 
     "fine_tune_bert": False,
 
@@ -342,7 +342,7 @@ class HybridBertCNNRecommender(nn.Module):
 def evaluate(model, dataloader, device, max_tokens):
     model.eval()
 
-    preds = []
+    all_preds = []
     true_ratings = []
 
     with torch.no_grad():
@@ -351,7 +351,7 @@ def evaluate(model, dataloader, device, max_tokens):
             item_idx = batch["item_idx"].to(device)
             rating = batch["rating"].to(device)
 
-            preds = model(
+            batch_preds = model(
                 user_idx=user_idx,
                 item_idx=item_idx,
                 user_reviews=batch["user_reviews"],
@@ -361,15 +361,15 @@ def evaluate(model, dataloader, device, max_tokens):
             )
 
             # Optional clamp to valid rating range.
-            preds = torch.clamp(preds, min=1.0, max=5.0)
+            batch_preds = torch.clamp(batch_preds, min=1.0, max=5.0)
 
-            preds.extend(preds.cpu().numpy())
+            all_preds.extend(batch_preds.cpu().numpy())
             true_ratings.extend(rating.cpu().numpy())
 
-    rmse = root_mean_squared_error(true_ratings, preds)
-    mae = mean_absolute_error(true_ratings, preds)
+    rmse = root_mean_squared_error(true_ratings, all_preds)
+    mae = mean_absolute_error(true_ratings, all_preds)
 
-    return rmse, mae
+    return all_preds, rmse, mae
 
 
 if __name__ == "__main__":
@@ -380,7 +380,7 @@ if __name__ == "__main__":
     UNK_USER = "<UNK_USER>"
     UNK_ITEM = "<UNK_ITEM>"
     user2idx = build_id_mapping(train_df["user_id"], UNK_USER)
-    item2idx = build_id_mapping(train_df["business_id"], UNK_USER)
+    item2idx = build_id_mapping(train_df["business_id"], UNK_ITEM)
 
     num_users = len(user2idx)
     num_items = len(item2idx)
@@ -485,7 +485,7 @@ if __name__ == "__main__":
 
         avg_train_loss = total_loss / len(train_loader)
 
-        val_rmse, val_mae = evaluate(
+        _, val_rmse, val_mae = evaluate(
             model=model,
             dataloader=val_loader,
             device=device,
@@ -508,14 +508,14 @@ if __name__ == "__main__":
     # Test evaluation
     model.load_state_dict(torch.load(best_model_path, map_location=device))
 
-    test_rmse, test_mae = evaluate(
+    preds, test_rmse, test_mae = evaluate(
         model=model,
         dataloader=test_loader,
         device=device,
         max_tokens=CONFIG["max_tokens"],
     )
 
-    result = {
+    metrics = {
         "rmse": test_rmse,
         "mae": test_mae
     }
@@ -526,6 +526,9 @@ if __name__ == "__main__":
     print("Test MAE:", test_mae)
     print("-" * 50)
 
-    result_df = pd.DataFrame([result])
-    result_df.to_csv(ROOT/"results/hybrid_bert_cnn.csv", index=False)
+    metrics_df = pd.DataFrame([metrics])
+    metrics_df.to_csv(ROOT/"results/hybrid_bert_cnn_metrics.csv", index=False)
 
+    preds_ratings = test_df[["user_id", "business_id"]].copy()
+    preds_ratings["predicted_rating"] = preds
+    preds_ratings.to_csv(ROOT/"results/hybrid_bert_cnn_prediction.csv", index=False)
